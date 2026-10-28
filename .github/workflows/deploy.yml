@@ -66,14 +66,13 @@ jobs:
           java-version: '21'
           cache: maven
           cache-dependency-path: ms-vehiculos/pom.xml
-
-      - name: Configurar Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
+      
       - name: Instalar Snyk CLI
-        run: npm install -g snyk
+        uses: snyk/actions/setup@master
+
+      - name: Verificar version de Snyk
+        run: snyk --version
+
 
       - name: Verificar herramientas
         run: |
