@@ -12,6 +12,9 @@ permissions:
   contents: read
 
 jobs:
+
+  # JOB 1: PRUEBAS UNITARIAS Y COBERTURA
+
   pruebas:
     name: Compilacion y pruebas unitarias
     runs-on: ubuntu-latest
@@ -45,7 +48,8 @@ jobs:
             ms-vehiculos/target/site/jacoco/
           if-no-files-found: warn
 
-  
+  # JOB 2: SEGURIDAD CON SNYK
+
   seguridad:
     name: Analisis de dependencias con Snyk
     runs-on: ubuntu-latest
@@ -66,13 +70,9 @@ jobs:
           java-version: '21'
           cache: maven
           cache-dependency-path: ms-vehiculos/pom.xml
-      
+
       - name: Instalar Snyk CLI
         uses: snyk/actions/setup@master
-
-      - name: Verificar version de Snyk
-        run: snyk --version
-
 
       - name: Verificar herramientas
         run: |
@@ -91,13 +91,9 @@ jobs:
             echo "ERROR: SNYK_TOKEN no configurado"
             exit 1
           fi
+
           snyk whoami
 
-      - name: Escanear dependencias con Snyk
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: |
-          
       - name: Escanear dependencias con Snyk
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
@@ -105,18 +101,9 @@ jobs:
           snyk test \
             --org=belruz \
             --file=pom.xml \
-            --severity-threshold=high \
-            --json-file-output=snyk-report.json
+            --severity-threshold=high
 
-
-      - name: Guardar reporte de Snyk
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: snyk-report
-          path: ms-vehiculos/snyk-report.json
-          if-no-files-found: warn
-
+  # JOB 3: CONSTRUCCION DE IMAGEN DOCKER
 
   docker:
     name: Construir imagen Docker
