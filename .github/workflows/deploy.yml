@@ -98,11 +98,17 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
+          
+      - name: Escanear dependencias con Snyk
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
           snyk test \
+            --org=belruz \
             --file=pom.xml \
             --severity-threshold=high \
-            --json-file-output=snyk-report.json \
-            -d
+            --json-file-output=snyk-report.json
+
 
       - name: Guardar reporte de Snyk
         if: always()
