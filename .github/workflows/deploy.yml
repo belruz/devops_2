@@ -45,6 +45,7 @@ jobs:
             ms-vehiculos/target/site/jacoco/
           if-no-files-found: warn
 
+  
   seguridad:
     name: Analisis de dependencias con Snyk
     runs-on: ubuntu-latest
@@ -66,26 +67,51 @@ jobs:
           cache: maven
           cache-dependency-path: ms-vehiculos/pom.xml
 
-      - name: Preparar dependencias Maven
-        run: mvn -B -DskipTests install
-
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
 
       - name: Instalar Snyk CLI
         run: npm install -g snyk
 
-      - name: Escanear dependencias y bloquear vulnerabilidades
+      - name: Verificar herramientas
+        run: |
+          java -version
+          mvn -version
+          snyk --version
+
+      - name: Resolver dependencias Maven
+        run: mvn -B install -DskipTests
+
+      - name: Verificar autenticacion Snyk
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           if [ -z "$SNYK_TOKEN" ]; then
-            echo "ERROR: Falta configurar SNYK_TOKEN"
+            echo "ERROR: SNYK_TOKEN no configurado"
             exit 1
           fi
-          snyk test --file=pom.xml --severity-threshold=high
+          snyk whoami
+
+      - name: Escanear dependencias con Snyk
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          snyk test \
+            --file=pom.xml \
+            --severity-threshold=high \
+            --json-file-output=snyk-report.json \
+            -d
+
+      - name: Guardar reporte de Snyk
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-report
+          path: ms-vehiculos/snyk-report.json
+          if-no-files-found: warn
+
 
   docker:
     name: Construir imagen Docker
