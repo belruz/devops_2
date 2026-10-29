@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configurar Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -38,7 +38,7 @@ jobs:
       - name: Ejecutar pruebas unitarias y JaCoCo
         run: mvn -B clean verify
 
-      - name: Guardar reportes de pruebas y cobertura
+      - name: Guardar reportes
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -48,10 +48,10 @@ jobs:
             ms-vehiculos/target/site/jacoco/
           if-no-files-found: warn
 
-  # JOB 2: ANALISIS CON SONARQUBE CLOUD
+  # JOB 2: SONARQUBE CLOUD
 
   sonar:
-    name: Analisis de calidad y seguridad SonarQube
+    name: Calidad y seguridad SonarQube
     runs-on: ubuntu-latest
     needs: pruebas
 
@@ -66,47 +66,51 @@ jobs:
           fetch-depth: 0
 
       - name: Configurar Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
           cache-dependency-path: ms-vehiculos/pom.xml
 
-      - name: Cache de SonarQube
+      - name: Cache SonarQube
         uses: actions/cache@v4
         with:
           path: ~/.sonar/cache
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
 
-      - name: Verificar token SonarQube
+      - name: Verificar token
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          if [ -z "$SONAR_TOKEN" ]; then
-            echo "ERROR: Falta configurar SONAR_TOKEN"
+          test -n "$SONAR_TOKEN" || {
+            echo "ERROR: Falta SONAR_TOKEN"
             exit 1
-          fi
+          }
 
-      - name: Ejecutar analisis de codigo y Quality Gate
+      - name: Analizar codigo y Quality Gate
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           mvn -B clean verify \
-            org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+            org.sonarsource.scanner.maven:sonar-maven-plugin:5.8.0.7211:sonar \
             -Dsonar.projectKey=belruz_devops_2 \
             -Dsonar.organization=belruz \
             -Dsonar.host.url=https://sonarcloud.io \
             -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
             -Dsonar.qualitygate.wait=true
-
-  # JOB 3: CONSTRUCCION DE IMAGEN DOCKER
+  
+  # JOB 3: CONSTRUCCION Y PUBLICACION DOCKER
 
   docker:
-    name: Construir imagen Docker
+    name: Construir y publicar imagen Docker
     runs-on: ubuntu-latest
     needs: [pruebas, sonar]
+
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Descargar codigo
@@ -121,4 +125,102 @@ jobs:
           context: ./ms-vehiculos
           file: ./ms-vehiculos/Dockerfile
           push: false
-          tags: ms-vehiculos:${{ github.sha }}
+          load: true
+          tags: ghcr.io/belruz/ms-vehiculos:${{ github.sha }}
+
+      - name: Autenticarse en GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publicar imagen Docker
+        if: github.event_name != 'pull_request'
+        run: |
+          docker push ghcr.io/belruz/ms-vehiculos:${{ github.sha }}
+
+
+  # JOB 4: DESPLIEGUE EN AWS EC2
+
+  desplegar:
+    name: Desplegar en AWS EC2
+    runs-on: ubuntu-latest
+    needs: docker
+
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v4
+
+      - name: Copiar Docker Compose a EC2
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          source: compose.yaml
+          target: /home/ubuntu/devops_2
+          overwrite: true
+
+      - name: Desplegar contenedores
+        uses: appleboy/ssh-action@v1
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          IMAGE_TAG: ${{ github.sha }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          envs: MYSQL_ROOT_PASSWORD,DB_PASSWORD,IMAGE_TAG
+          command_timeout: 15m
+          script: |
+            set -eu
+
+            cd /home/ubuntu/devops_2
+            umask 077
+
+            if [ -z "$MYSQL_ROOT_PASSWORD" ] ||
+               [ -z "$DB_PASSWORD" ]; then
+              echo "ERROR: Faltan secretos de MySQL"
+              exit 1
+            fi
+
+            printf 'MYSQL_ROOT_PASSWORD=%s\n' \
+              "$MYSQL_ROOT_PASSWORD" > .env
+
+            printf 'DB_PASSWORD=%s\n' \
+              "$DB_PASSWORD" >> .env
+
+            printf 'VEHICULOS_IMAGE=ghcr.io/belruz/ms-vehiculos:%s\n' \
+              "$IMAGE_TAG" >> .env
+
+            chmod 600 .env
+
+            sudo docker compose config -q
+            sudo docker compose pull
+            sudo docker compose up -d --no-build
+
+            echo "Estado de los contenedores:"
+            sudo docker compose ps
+
+            echo "Verificando API..."
+            for i in $(seq 1 30); do
+              if curl -fsS -o /dev/null \
+                http://localhost:9004/v3/api-docs; then
+                echo "API funcionando en AWS"
+                exit 0
+              fi
+              sleep 5
+            done
+
+            echo "ERROR: La API no respondio"
+            sudo docker compose logs --tail=60 ms-vehiculos
+            exit 1

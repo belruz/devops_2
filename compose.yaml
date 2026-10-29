@@ -25,7 +25,7 @@ services:
     build:
       context: ./ms-vehiculos
       dockerfile: Dockerfile
-    image: ms-vehiculos:1.0
+    image: ${VEHICULOS_IMAGE:-ms-vehiculos:1.0}
     restart: unless-stopped
     ports:
       - "9004:9004"
